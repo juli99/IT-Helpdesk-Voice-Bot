@@ -1,0 +1,23 @@
+{
+    "terms": [
+        "VPN",
+        "DNS",
+        "DHCP",
+        "SQL",
+        "Active Directory",
+        "domain controller",
+        "LDAP",
+        "SSL",
+        "TLS",
+        "firewall",
+        "network adapter",
+        "proxy",
+        "gateway",
+        "subnet",
+        "VLAN",
+        "server rack",
+        "UPS",
+        "production server",
+        "load balancer"
+    ]
+}
