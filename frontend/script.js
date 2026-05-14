@@ -11,20 +11,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const voiceIcon = document.getElementById('voiceIcon');
 
     let currentVoiceGender = 'male';
-    voiceIcon.src = '/static/female_icon.png';
+    voiceIcon.src = '/frontend/female_icon.png';
     let currentState = 'ready';
     let isFirstClick = true;
 
     voiceIcon.src = currentVoiceGender === 'male'
-        ? '/static/female_icon.png'
-        : '/static/male_icon.png';
+        ? '/frontend/female_icon.png'
+        : '/frontend/male_icon.png';
 
     let animationPink = lottie.loadAnimation({
         container: lottieContainerPink,
         renderer: 'svg',
         loop: true,
         autoplay: false,
-        path: '/static/wave_pink.json'
+        path: '/frontend/wave_pink.json'
     });
 
     let animationGreen = lottie.loadAnimation({
@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderer: 'svg',
         loop: true,
         autoplay: false,
-        path: '/static/wave_green.json'
+        path: '/frontend/wave_green.json'
     });
 
     let currentAnimation = animationPink;
@@ -163,6 +163,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     voiceToggle.addEventListener('click', () => {
         currentVoiceGender = currentVoiceGender === 'male' ? 'female' : 'male';
-        voiceIcon.src = currentVoiceGender === 'male' ? '/static/female_icon.png' : '/static/male_icon.png';
+        voiceIcon.src = currentVoiceGender === 'male' ? '/frontend/female_icon.png' : '/frontend/male_icon.png';
     });
 });
