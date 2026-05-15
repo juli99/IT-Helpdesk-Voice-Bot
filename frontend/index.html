@@ -15,26 +15,28 @@
     <div class="center-stage">
         <h2 class="welcome-title">WELCOME TO THE IT ASSISTANT BOT</h2>
 
-        <div id="orbButton" class="orb-unified">
-            <div id="lottieContainerPink"></div>
-            <div id="lottieContainerGreen"></div>
-            <div class="orb-content"><span id="orbStatus">Push to Talk</span></div>
-        </div>
+        <div class="main-interaction-area">
+            <div id="orbButton" class="orb-unified">
+                <div id="lottieContainerPink"></div>
+                <div id="lottieContainerGreen"></div>
+                <div class="orb-content"><span id="orbStatus">Push to Talk</span></div>
+            </div>
 
-        <div class="side-controls">
-            <button id="voiceToggle" class="icon-btn">
-                <img id="voiceIcon" src="/frontend/female_icon.png" alt="voice toggle">
-            </button>
+            <div class="side-controls-vertical">
+                <button id="voiceToggle" class="icon-btn">
+                    <img id="voiceIcon" src="/frontend/female_icon.png" alt="voice toggle">
+                </button>
 
-            <button id="resetButton" class="reset-btn">
-                 <img src="/frontend/reset.png" alt="reset">
-            </button>
+                <button id="resetButton" class="reset-btn">
+                     <img src="/frontend/reset.png" alt="reset">
+                </button>
+            </div>
         </div>
 
         <div id="chatBox" class="chat-container"></div>
     </div>
 
     <script src="/knowledge_base.js"></script>
-    <script src="/frontend/script.js"></script>
+    <script src="/frontend/app.js"></script>
 </body>
 </html>

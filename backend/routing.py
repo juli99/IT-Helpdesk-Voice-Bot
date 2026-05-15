@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent               
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(dotenv_path=ROOT_DIR / ".env")
 
 whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
 
