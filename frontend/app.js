@@ -33,6 +33,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     async function handleTroubleshooting(userInput, data) {
+
+        if (typeof KB === 'undefined') {
+            console.error("Knowledge Base (KB) is not loaded!");
+            return;
+        }
+
         const text = userInput.toLowerCase();
 
         if (currentTopic) {
