@@ -11,7 +11,7 @@ from datetime import datetime
 from faster_whisper import WhisperModel
 
 from classify import classify
-from correction import llm_correct
+from correction import correction
 from tts import get_audio_base64
 
 BASE_DIR = Path(__file__).resolve().parent  
