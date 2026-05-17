@@ -17,9 +17,25 @@ Tier 2 triggers (ANY of these = tier 2):
 - production/prod server down or unreachable
 - whole office / everyone affected
 - database down / SQL server unreachable
-- Active Directory / domain controller down
-- website down for customers
+- Active Directory / domain controller completely down
+- website down for all customers
 - server room / rack / UPS failure
+
+NOT tier 2 (these are tier 1):
+- single user cannot log in
+- Outlook not syncing for one person
+- Active Directory mentioned but not completely down
+- slow computer or internet for one user
+- one file not accessible
+
+Intent examples:
+- vpn: cannot connect to VPN, VPN disconnecting, VPN timeout
+- email: Outlook not syncing, email not working
+- login: forgot password, can't log in, locked out
+- network: internet slow, no internet, router issues
+- software: app crashing, software not opening
+- hardware: printer, mouse, keyboard, physical device
+- other: anything that doesn't fit above
 
 Return:
 {
