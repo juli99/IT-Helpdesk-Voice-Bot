@@ -60,7 +60,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         raw_text = " ".join([s.text for s in segments])
         os.remove(temp_filename)
 
-        correction = llm_correct(raw_text, flagged=[], vocab_terms=[])
+        correction = correction(raw_text, flagged=[], vocab_terms=[])
         corrected_text = correction['corrected_transcript']
         
         classification = classify(corrected_text)
