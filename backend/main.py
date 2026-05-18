@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from asr import return_transcription
 from correction import correction
 from classify import classify
-# from routing import route          # Ido — route() must exist before this works
+from routing import route
 from ticket import generate_ticket
 from tts import get_audio_base64
 
