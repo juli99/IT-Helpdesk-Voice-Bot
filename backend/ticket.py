@@ -1,5 +1,6 @@
 from datetime import datetime
 
+
 def generate_ticket(session: dict) -> dict:
     return {
         'ticket_id':             f"TKT-{datetime.now():%Y%m%d%H%M%S}",

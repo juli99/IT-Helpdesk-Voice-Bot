@@ -2,7 +2,10 @@ import json
 from fuzzy_correction import fuzzy_check
 from llm_correction import llm_correct
 
-def load_vocab(path='it_vocab.json') -> list:
+def load_vocab(path=None) -> list:
+    if path is None:
+        from pathlib import Path
+        path = Path(__file__).resolve().parent / 'it_vocab.json'
     with open(path, 'r') as f:
         data = json.load(f)
         return data['terms']

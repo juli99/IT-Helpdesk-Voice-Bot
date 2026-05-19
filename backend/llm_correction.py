@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 import os, json
 
 load_dotenv()
-token=os.getenv("API_KEY")
+token=os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")
 client = OpenAI(
     api_key=token,
     base_url="https://api.groq.com/openai/v1"

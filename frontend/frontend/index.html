@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IT Bot Assistant</title>
+    <link rel="stylesheet" href="/frontend/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.9.6/lottie.min.js"></script>
+</head>
+
+<body>
+    <div class="top-controls">
+        <button id="themeToggle" class="icon-btn" style="border:none; background:none; font-size: 2rem;">🔅</button>
+    </div>
+
+    <div class="center-stage">
+        <h2 class="welcome-title">WELCOME TO THE IT ASSISTANT BOT</h2>
+
+        <div class="main-interaction-area">
+            <div id="orbButton" class="orb-unified">
+                <div id="lottieContainerPink"></div>
+                <div id="lottieContainerGreen"></div>
+                <div class="orb-content"><span id="orbStatus">Push to Talk</span></div>
+            </div>
+
+            <div class="side-controls-vertical">
+                <button id="voiceToggle" class="icon-btn">
+                    <img id="voiceIcon" src="/frontend/female_icon.png" alt="voice toggle">
+                </button>
+
+                <button id="resetButton" class="reset-btn">
+                    <img src="/frontend/reset.png" ...>
+                </button>
+            </div>
+        </div>
+
+        <div id="chatBox" class="chat-container"></div>
+    </div>
+
+    <script src="/frontend/app.js"></script>
+</body>
+</html>

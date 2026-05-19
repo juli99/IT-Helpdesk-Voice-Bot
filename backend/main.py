@@ -3,7 +3,7 @@ import json
 import tempfile
 import shutil
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from datetime import datetime
 
 from fastapi import FastAPI, File, UploadFile, Form
@@ -24,7 +24,8 @@ BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
-load_dotenv(dotenv_path=ROOT_DIR / ".env")
+load_dotenv(dotenv_path=ROOT_DIR / ".env")   # normal project layout
+load_dotenv(find_dotenv(usecwd=False))        # fallback: walk up from this file (covers worktree)
 
 # ── App init ─────────────────────────────────────────────────
 app = FastAPI()
@@ -48,13 +49,16 @@ class SpeakRequest(BaseModel):
     text: str
     voice_id: str
 
+def resolve_voice_id(voice_gender: str) -> str:
+    female = os.getenv("ELEVENLABS_VOICE_ID_FEMALE")
+    male = os.getenv("ELEVENLABS_VOICE_ID_MALE")
+    if voice_gender == "female":
+        return female or male
+    return male or female
+
 @app.post("/speak")
 async def speak_handler(request: SpeakRequest):
-    v_id = (
-        os.getenv("ELEVENLABS_VOICE_ID_FEMALE")
-        if request.voice_id == "female"
-        else os.getenv("ELEVENLABS_VOICE_ID_MALE")
-    )
+    v_id = resolve_voice_id(request.voice_id)
     audio_data = await get_audio_base64(request.text, v_id)
     return {"audio": audio_data if audio_data else ""}
 
@@ -76,6 +80,8 @@ async def process_call(
 
         # 2. ASR
         raw_transcript = return_transcription(tmp_path)
+        if not raw_transcript:
+            return {"error": "no_audio", "bot_message": "Sorry, I didn't catch that. Could you try again?", "audio": ""}
 
         # 3. ASR error correction (fuzzy + LLM, handled internally)
         correction_result = correction(raw_transcript)
@@ -93,12 +99,7 @@ async def process_call(
         bot_message = route_result["message"]
 
         # 6. TTS
-        v_id = (
-            os.getenv("ELEVENLABS_VOICE_ID_FEMALE")
-            if voice_id == "female"
-            else os.getenv("ELEVENLABS_VOICE_ID_MALE")
-        )
-        audio_b64 = await get_audio_base64(bot_message, v_id)
+        audio_b64 = await get_audio_base64(bot_message, resolve_voice_id(voice_id))
 
         # 7. Build session + generate ticket on escalation/close
         session = {
@@ -134,6 +135,43 @@ async def process_call(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+# ── /close endpoint (user confirmed issue resolved) ───────────
+@app.post("/close")
+async def close_session(voice_id: str = Form("female")):
+    message = "Excellent! I am glad we were able to resolve the issue. Thank you for contacting IT support. Have a wonderful day!"
+    audio_b64 = await get_audio_base64(message, resolve_voice_id(voice_id))
+    session = {
+        "caller_id": "Unknown",
+        "tier": "1",
+        "intent": "resolved",
+        "raw_transcript": "",
+        "corrected_transcript": "",
+        "corrections": [],
+        "steps_taken": [],
+        "outcome": "close",
+        "escalation_reason": None
+    }
+    ticket = generate_ticket(session)
+    return {"bot_message": message, "audio": audio_b64 or "", "action": "close", "ticket": ticket}
+
+
+# ── /step endpoint (fetch next troubleshooting step by intent) ─
+@app.post("/step")
+async def get_step(intent: str = Form("other"), step: int = Form(0), voice_id: str = Form("female")):
+    with open(BASE_DIR / "kb.json", encoding="utf-8") as f:
+        kb_data = json.load(f)
+    topic = intent.lower() if intent.lower() in kb_data else "other"
+    steps = kb_data.get(topic, kb_data.get("other", []))
+    if step >= len(steps):
+        message = "We have gone through all standard remote troubleshooting steps, but the issue persists. I am creating a high-priority ticket for our desktop support team."
+        action = "escalate"
+    else:
+        message = steps[step]
+        action = "troubleshoot"
+    audio_b64 = await get_audio_base64(message, resolve_voice_id(voice_id))
+    return {"bot_message": message, "audio": audio_b64 or "", "action": action}
+
 
 # ── Entry point ───────────────────────────────────────────────
 if __name__ == "__main__":
