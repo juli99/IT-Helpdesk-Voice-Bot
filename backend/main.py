@@ -9,7 +9,7 @@ from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from asr import return_transcription
@@ -38,6 +38,10 @@ app.add_middleware(
 )
 
 # ── Static routes ─────────────────────────────────────────────
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
 @app.get("/")
 async def serve_home():
     return FileResponse(FRONTEND_DIR / "index.html")
@@ -135,6 +139,25 @@ async def process_call(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+# ── /asr endpoint (transcript only, used during troubleshoot follow-ups) ─
+@app.post("/asr")
+async def asr_only(file: UploadFile = File(...)):
+    tmp_path = None
+    try:
+        suffix = Path(file.filename).suffix or ".webm"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+        transcript = return_transcription(tmp_path)
+        return {"transcript": transcript or ""}
+    except Exception as e:
+        print(f"[asr_only] Error: {e}")
+        return {"transcript": ""}
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
 
 # ── /close endpoint (user confirmed issue resolved) ───────────
 @app.post("/close")
