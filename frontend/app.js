@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const voiceToggle = document.getElementById('voiceToggle');
     const voiceIcon = document.getElementById('voiceIcon');
     const resetButton = document.getElementById('resetButton');
+    const humanButton = document.getElementById('humanButton');
 
     let currentVoiceGender = 'male';
     let currentState = 'ready';
@@ -283,6 +284,28 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // ── Live Agent transfer ──────────────────────────────────────
+    async function transferToHuman() {
+        if (isFirstClick) {
+            isFirstClick = false;
+            chatBox.classList.add('visible');
+        }
+        appendMessage("You: Please connect me to a human representative.", 'user-message');
+        const msg = "Connecting you to a human representative now. Please hold while I transfer your call.";
+        appendMessage("Bot: " + msg, 'bot-message');
+        await playAudio(msg);
+        if (humanButton) {
+            humanButton.disabled = true;
+            humanButton.textContent = 'Transfer in progress';
+        }
+        orbButton.style.pointerEvents = 'none';
+        orbButton.style.opacity = '0.4';
+    }
+
+    if (humanButton) {
+        humanButton.addEventListener('click', transferToHuman);
+    }
+
     orbButton.addEventListener('mouseup', () => {
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
@@ -320,5 +343,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         chatBox.innerHTML = '';
         chatBox.classList.remove('visible');
+
+        if (humanButton) {
+            humanButton.disabled = false;
+            humanButton.textContent = 'Live Agent';
+        }
+
+        orbButton.style.pointerEvents = '';
+        orbButton.style.opacity = '';
     });
 });

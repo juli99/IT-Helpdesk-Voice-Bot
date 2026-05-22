@@ -84,12 +84,54 @@ body {
 
 .side-controls-vertical {
     position: absolute;
-    left: calc(50% + 185px); 
+    left: calc(50% + 185px);
     bottom: 0;
     display: flex;
     flex-direction: column;
     gap: 15px;
     z-index: 20;
+}
+
+.side-controls-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+}
+
+.human-btn {
+    background: var(--chat-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-radius: 50px;
+    min-width: 140px;
+    height: 60px;
+    padding: 0 18px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.human-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateY(-1px);
+}
+
+.human-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.system-message {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    font-style: italic;
+    text-align: center;
+    opacity: 0.7;
 }
 
 .orb-unified {
