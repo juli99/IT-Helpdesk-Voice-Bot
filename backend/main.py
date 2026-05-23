@@ -1,10 +1,9 @@
 import os
-import json
+import re
 import tempfile
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
-from datetime import datetime
 
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,20 +13,52 @@ from pydantic import BaseModel
 
 from asr import return_transcription
 from correction import correction
-from classify import classify
-from routing import route
+from rag import rag_respond
 from ticket import generate_ticket
 from tts import get_audio_base64
+import logger
 
-# ── Path setup ──────────────────────────────────────────────
+# ── Path setup ───────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
-load_dotenv(dotenv_path=ROOT_DIR / ".env")   # normal project layout
-load_dotenv(find_dotenv(usecwd=False))        # fallback: walk up from this file (covers worktree)
+load_dotenv(dotenv_path=ROOT_DIR / ".env")
+load_dotenv(find_dotenv(usecwd=False))
 
-# ── App init ─────────────────────────────────────────────────
+# ── Per-session state (single-user demo) ─────────────────────────
+# conversation_history: list of {"role": "user"|"assistant", "content": "..."}
+# attempt_count: how many troubleshoot responses have been given this session.
+#                Hard limit is MAX_ATTEMPTS — once reached, the next response
+#                is always "escalate" regardless of what the LLM returns.
+# ── Tier 2 rule-based pre-check ──────────────────────────────────
+# These patterns fire BEFORE the LLM and guarantee immediate escalation
+# regardless of what the RAG pipeline would otherwise decide.
+_TIER2_PATTERNS = [
+    # Multiple users affected
+    r'\b(everyone|entire\s+team|whole\s+(team|office|company|department|floor))\b',
+    r'\ball\s+(of\s+us|users?|staff|employees?|colleagues?)\b',
+    r'\b(no\s+one|nobody|none\s+of\s+us)\b.{0,50}\b(can|able\s+to)\b',
+    r'\b(multiple|several|many)\s+users?\b.{0,40}\b(affected|same\s+issue|experiencing)\b',
+    # Critical infrastructure
+    r'\b(production|prod)\b.{0,25}\b(down|offline|unreachable|not\s+respond)\b',
+    r'\b(server|database|db|sql|domain\s+controller)\b.{0,25}\b(down|crash|offline|unreachable)\b',
+    r'\bactive\s+directory\b.{0,25}\b(down|offline|completely|unavailable)\b',
+    # Security incidents
+    r'\b(ransomware|malware|breach|hacked|phishing\s+attack|cyber\s+attack|virus\s+spread)\b',
+]
+_TIER2_RE = re.compile('|'.join(_TIER2_PATTERNS), re.IGNORECASE)
+
+def _is_tier2(text: str) -> bool:
+    return bool(_TIER2_RE.search(text))
+
+MAX_ATTEMPTS = 3       # hard escalation after this many troubleshoot responses
+MAX_CLARIFY  = 3       # after this many consecutive unintelligible inputs, give up gracefully
+conversation_history: list[dict] = []
+attempt_count: int  = 0   # troubleshoot responses given this session
+clarify_count: int  = 0   # consecutive unintelligible/clarify turns
+
+# ── App init ─────────────────────────────────────────────────────
 app = FastAPI()
 
 app.add_middleware(
@@ -37,7 +68,7 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# ── Static routes ─────────────────────────────────────────────
+# ── Static routes ─────────────────────────────────────────────────
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(status_code=204)
@@ -48,17 +79,18 @@ async def serve_home():
 
 app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend")
 
-# ── /speak endpoint (frontend TTS requests) ───────────────────
-class SpeakRequest(BaseModel):
-    text: str
-    voice_id: str
-
+# ── Voice ID helper ───────────────────────────────────────────────
 def resolve_voice_id(voice_gender: str) -> str:
     female = os.getenv("ELEVENLABS_VOICE_ID_FEMALE")
-    male = os.getenv("ELEVENLABS_VOICE_ID_MALE")
+    male   = os.getenv("ELEVENLABS_VOICE_ID_MALE")
     if voice_gender == "female":
         return female or male
     return male or female
+
+# ── /speak — frontend TTS requests ───────────────────────────────
+class SpeakRequest(BaseModel):
+    text: str
+    voice_id: str
 
 @app.post("/speak")
 async def speak_handler(request: SpeakRequest):
@@ -66,65 +98,146 @@ async def speak_handler(request: SpeakRequest):
     audio_data = await get_audio_base64(request.text, v_id)
     return {"audio": audio_data if audio_data else ""}
 
-# ── /process endpoint (main pipeline) ────────────────────────
+# ── /process — main RAG pipeline ─────────────────────────────────
 @app.post("/process")
 async def process_call(
     file: UploadFile = File(...),
-    step: int = Form(0),
-    resolved: bool = Form(False),
-    voice_id: str = Form("female")
+    voice_id: str = Form("male")
 ):
+    global conversation_history, attempt_count, clarify_count
     tmp_path = None
     try:
-        # 1. Write audio to temp file (Whisper needs a file path)
-        suffix = Path(file.filename).suffix or ".wav"
+        # 1. Save audio to temp file
+        suffix = Path(file.filename).suffix or ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             shutil.copyfileobj(file.file, tmp)
             tmp_path = tmp.name
 
+        # ── Request header ────────────────────────────────────────
+        logger.section(f"NEW REQUEST  │  attempt {attempt_count}/{MAX_ATTEMPTS}  │  clarify streak {clarify_count}/{MAX_CLARIFY}")
+
         # 2. ASR
         raw_transcript = return_transcription(tmp_path)
-        if not raw_transcript:
-            return {"error": "no_audio", "bot_message": "Sorry, I didn't catch that. Could you try again?", "audio": ""}
+        if not raw_transcript or not raw_transcript.strip():
+            return {
+                "error": "no_audio",
+                "bot_message": "Sorry, I didn't catch that — could you try again?",
+                "audio": ""
+            }
 
-        # 3. ASR error correction (fuzzy + LLM, handled internally)
+        # 3. Fuzzy + LLM correction
         correction_result = correction(raw_transcript)
-        corrected_transcript = correction_result["corrected_transcript"]
-        corrections_applied = correction_result["corrections"]
+        corrected    = correction_result.get("corrected_transcript", raw_transcript)
+        confidence   = correction_result.get("confidence", "low")
 
-        # 4. Classification
-        classification = classify(corrected_transcript)
-        tier = classification["tier"]
-        intent = classification["intent"]
+        # 4a. Pre-flight gibberish check
+        words        = corrected.split()
+        alpha_ratio  = sum(c.isalpha() for c in corrected) / max(len(corrected), 1)
+        is_gibberish = (confidence == "low" and len(words) < 3) or alpha_ratio < 0.5
 
-        # 5. Routing (Ido) — requires routing.py with route() implemented
-        route_result = route(tier=tier, intent=intent, step=step, resolved=resolved)
-        action = route_result["action"]
-        bot_message = route_result["message"]
+        if is_gibberish:
+            clarify_count += 1
+            logger.process_clarify(clarify_count, MAX_CLARIFY)
+
+        # 4b. Tier 2 rule-based gate — fires before LLM, cannot be overridden
+        if not is_gibberish and _is_tier2(corrected):
+            logger.process_gate("TIER 2 DETECTED", f"rule-based match in: '{corrected[:60]}'")
+            bot_message = (
+                "This sounds like it's affecting multiple users or a critical system — "
+                "that's a Tier 2 issue that needs immediate attention from our infrastructure "
+                "team. I'm creating a high-priority ticket right now and a specialist will "
+                "be in touch with you shortly."
+            )
+            action = "escalate"
+            intent = "other"
+
+        # 4c. Clarify wall
+        elif clarify_count >= MAX_CLARIFY:
+            clarify_count = 0
+            bot_message = (
+                "I'm really sorry — I've had trouble understanding your last few messages. "
+                "If you're having difficulty with the voice interface, please use the "
+                "'Live Agent' button to speak with a human representative directly."
+            )
+            action = "clarify_wall"
+            intent = "other"
+            logger.process_gate("CLARIFY WALL", f"streak reached {MAX_CLARIFY}")
+
+        # 4e. Attempt limit reached — one final LLM exchange before hard escalation.
+        #     The LLM may complete any in-progress step (e.g. explain how to uninstall)
+        #     but cannot propose a brand-new troubleshooting approach.
+        #     If it still returns "troubleshoot", we push attempt_count over the limit
+        #     so the NEXT request hard-escalates unconditionally.
+        elif attempt_count >= MAX_ATTEMPTS:
+            logger.process_gate("FINAL EXCHANGE", f"limit {MAX_ATTEMPTS} reached — LLM gets one wrap-up turn")
+            rag_result  = rag_respond(corrected, conversation_history,
+                                      attempt=attempt_count + 1, is_final=True)
+            bot_message = rag_result["message"]
+            action      = rag_result["action"]
+            intent      = rag_result.get("intent", "other")
+
+            if action == "troubleshoot":
+                # LLM chose to complete the current step rather than escalate.
+                # Push the counter past the limit so the very next request
+                # hard-escalates with no further LLM call.
+                attempt_count += 1
+                logger.process_attempt(attempt_count, MAX_ATTEMPTS)
+            clarify_count = 0
+
+        else:
+            # 4d. Normal RAG path
+            rag_result  = rag_respond(corrected, conversation_history, attempt=attempt_count + 1)
+            bot_message = rag_result["message"]
+            action      = rag_result["action"]
+            intent      = rag_result.get("intent", "other")
+
+            if action == "clarify":
+                clarify_count += 1
+                logger.process_clarify(clarify_count, MAX_CLARIFY)
+            else:
+                clarify_count = 0
+
+            if action == "troubleshoot":
+                attempt_count += 1
+                logger.process_attempt(attempt_count, MAX_ATTEMPTS)
+
+        # 5. Update conversation history
+        conversation_history.append({"role": "user",      "content": corrected})
+        conversation_history.append({"role": "assistant", "content": bot_message})
 
         # 6. TTS
+        logger.bot_reply(bot_message)
         audio_b64 = await get_audio_base64(bot_message, resolve_voice_id(voice_id))
 
-        # 7. Build session + generate ticket on escalation/close
-        session = {
-            "caller_id": "Unknown",  # mocked — no auth system
-            "tier": tier,
-            "intent": intent,
-            "raw_transcript": raw_transcript,
-            "corrected_transcript": corrected_transcript,
-            "corrections": corrections_applied,
-            "steps_taken": [bot_message] if action == "troubleshoot" else [],
-            "outcome": action,
-            "escalation_reason": route_result.get("reason")
-        }
-        ticket = generate_ticket(session) if action in ("escalate", "close") else None
+        # 7. Generate ticket on escalate or close; clear state on any session end
+        ticket = None
+        if action in ("escalate", "close"):
+            logger.ticket_created(action, intent)
+            session = {
+                "caller_id": "Unknown",
+                "tier": "2" if action == "escalate" else "1",
+                "intent": intent,
+                "raw_transcript": raw_transcript,
+                "corrected_transcript": corrected,
+                "corrections": correction_result.get("corrections", []),
+                "steps_taken": [
+                    m["content"] for m in conversation_history
+                    if m["role"] == "assistant"
+                ],
+                "outcome": action,
+                "escalation_reason": (
+                    f"Hard limit reached after {MAX_ATTEMPTS} attempts"
+                    if attempt_count >= MAX_ATTEMPTS
+                    else f"RAG pipeline — action: {action}, intent: {intent}"
+                )
+            }
+            ticket = generate_ticket(session)
+            conversation_history = []
+            attempt_count  = 0
+            clarify_count  = 0
 
-        # 8. Return
         return {
-            "raw_transcript": raw_transcript,
-            "corrected_transcript": corrected_transcript,
-            "corrections": corrections_applied,
-            "tier": tier,
+            "corrected_transcript": corrected,
             "intent": intent,
             "action": action,
             "bot_message": bot_message,
@@ -140,7 +253,7 @@ async def process_call(
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# ── /asr endpoint (transcript only, used during troubleshoot follow-ups) ─
+# ── /asr — transcript only (kept for backwards compatibility) ─────
 @app.post("/asr")
 async def asr_only(file: UploadFile = File(...)):
     tmp_path = None
@@ -158,45 +271,17 @@ async def asr_only(file: UploadFile = File(...)):
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
+# ── /reset — clear server-side conversation history ───────────────
+@app.post("/reset")
+async def reset_session():
+    global conversation_history, attempt_count, clarify_count
+    conversation_history = []
+    attempt_count  = 0
+    clarify_count  = 0
+    print("[Session] Conversation history and all counters cleared.")
+    return {"status": "ok"}
 
-# ── /close endpoint (user confirmed issue resolved) ───────────
-@app.post("/close")
-async def close_session(voice_id: str = Form("female")):
-    message = "Excellent! I am glad we were able to resolve the issue. Thank you for contacting IT support. Have a wonderful day!"
-    audio_b64 = await get_audio_base64(message, resolve_voice_id(voice_id))
-    session = {
-        "caller_id": "Unknown",
-        "tier": "1",
-        "intent": "resolved",
-        "raw_transcript": "",
-        "corrected_transcript": "",
-        "corrections": [],
-        "steps_taken": [],
-        "outcome": "close",
-        "escalation_reason": None
-    }
-    ticket = generate_ticket(session)
-    return {"bot_message": message, "audio": audio_b64 or "", "action": "close", "ticket": ticket}
-
-
-# ── /step endpoint (fetch next troubleshooting step by intent) ─
-@app.post("/step")
-async def get_step(intent: str = Form("other"), step: int = Form(0), voice_id: str = Form("female")):
-    with open(BASE_DIR / "kb.json", encoding="utf-8") as f:
-        kb_data = json.load(f)
-    topic = intent.lower() if intent.lower() in kb_data else "other"
-    steps = kb_data.get(topic, kb_data.get("other", []))
-    if step >= len(steps):
-        message = "We have gone through all standard remote troubleshooting steps, but the issue persists. I am creating a high-priority ticket for our desktop support team."
-        action = "escalate"
-    else:
-        message = steps[step]
-        action = "troubleshoot"
-    audio_b64 = await get_audio_base64(message, resolve_voice_id(voice_id))
-    return {"bot_message": message, "audio": audio_b64 or "", "action": action}
-
-
-# ── Entry point ───────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
