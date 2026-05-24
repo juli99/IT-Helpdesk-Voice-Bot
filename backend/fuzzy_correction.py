@@ -12,8 +12,6 @@ STOP_WORDS = {
     'isn', 'isnt', 'dont', 'cant', 'wont', 'didnt', 'doesnt'
 }
 
-# Words excluded ONLY from single-word matching — they are too generic to
-# safely correct on their own. They are still matched as part of n-grams.
 SINGLE_WORD_SKIP = {
     'update', 'install', 'mode', 'scan', 'check',
     'clean', 'repair', 'restore', 'run'
@@ -41,20 +39,16 @@ def fuzzy_check(transcript: str, vocab_terms: list) -> list:
 
     flagged: dict = {}
 
-    # ── Single-word matching ──────────────────────────────────────
     for word in words:
         if word in SINGLE_WORD_SKIP:
             continue
         if _is_exact(word, single_terms):
-            continue  # already correct
+            continue  
 
         best_score, best_term = 0, None
         for term in single_terms:
             tl = term.lower()
             wl = word.lower()
-            # Skip only when the words are IDENTICAL substrings of each other
-            # (e.g. "install" vs "reinstall").  Allow near-matches like
-            # "aut" vs "auth" or "outluk" vs "outlook".
             if wl == tl:
                 continue
             if len(wl) >= 5 and len(tl) >= 5 and (wl in tl or tl in wl):
@@ -63,8 +57,6 @@ def fuzzy_check(transcript: str, vocab_terms: list) -> list:
             if score > best_score:
                 best_score, best_term = score, term
 
-        # Threshold 80: catches genuine mis-pronunciations without flagging
-        # common words like "having" → "hanging" (score 76.9).
         if best_score >= 80 and best_term:
             flagged[word] = {
                 'original': word,
@@ -72,7 +64,6 @@ def fuzzy_check(transcript: str, vocab_terms: list) -> list:
                 'score': round(best_score, 1)
             }
 
-    # ── Multi-word phrase matching (n-grams up to 4 words) ────────
     all_words = clean.split()
     for n in range(2, 5):
         for ngram in get_ngrams(all_words, n):

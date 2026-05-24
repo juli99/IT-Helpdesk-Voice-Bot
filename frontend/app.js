@@ -17,6 +17,94 @@ document.addEventListener('DOMContentLoaded', () => {
     let audioChunks        = [];
     let recordingStartTime = 0;
 
+    // ── Mic visualizer state ─────────────────────────────────────
+    const micCanvas   = document.getElementById('micVisualizer');
+    const micCtx      = micCanvas.getContext('2d');
+    let micAudioCtx   = null;
+    let micAnalyser   = null;
+    let micDataArray  = null;
+    let micAnimFrame  = null;
+
+    function startMicVisualizer(stream) {
+        // Size the canvas to match its CSS-rendered size (device-pixel-ratio aware)
+        const dpr  = window.devicePixelRatio || 1;
+        const size = orbButton.offsetWidth;
+        micCanvas.width  = size * dpr;
+        micCanvas.height = size * dpr;
+        micCtx.scale(dpr, dpr);
+
+        micAudioCtx  = new AudioContext();
+        const source = micAudioCtx.createMediaStreamSource(stream);
+        micAnalyser  = micAudioCtx.createAnalyser();
+        micAnalyser.fftSize          = 1024;
+        micAnalyser.smoothingTimeConstant = 0.88;  // heavier smoothing = calmer response
+        source.connect(micAnalyser);
+
+        micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+        micCanvas.style.opacity = '1';
+
+        function draw() {
+            micAnimFrame = requestAnimationFrame(draw);
+            micAnalyser.getByteTimeDomainData(micDataArray);
+
+            const W  = size;
+            const H  = size;
+            const cx = W / 2;
+            const cy = H / 2;
+            const r  = cx - 2;
+
+            micCtx.clearRect(0, 0, W, H);
+
+            // Clip all drawing to the circle shape
+            micCtx.save();
+            micCtx.beginPath();
+            micCtx.arc(cx, cy, r, 0, Math.PI * 2);
+            micCtx.clip();
+
+            const bufLen  = micDataArray.length;
+            const sliceW  = W / bufLen;
+            const amplitude = cy * 0.32;   // max vertical swing — kept subtle
+
+            function tracePath() {
+                micCtx.beginPath();
+                for (let i = 0; i < bufLen; i++) {
+                    const v = micDataArray[i] / 128.0;
+                    const y = cy + (v - 1) * amplitude;
+                    i === 0 ? micCtx.moveTo(i * sliceW, y)
+                             : micCtx.lineTo(i * sliceW, y);
+                }
+            }
+
+            // ── Glow pass ───────────────────────────────────────
+            micCtx.lineWidth  = 6;
+            micCtx.strokeStyle = 'rgba(34, 197, 94, 0.18)';
+            micCtx.shadowColor = 'rgba(34, 197, 94, 0.5)';
+            micCtx.shadowBlur  = 14;
+            tracePath();
+            micCtx.stroke();
+
+            // ── Crisp line ──────────────────────────────────────
+            micCtx.lineWidth   = 2;
+            micCtx.strokeStyle = 'rgba(34, 197, 94, 0.92)';
+            micCtx.shadowBlur  = 0;
+            tracePath();
+            micCtx.stroke();
+
+            micCtx.restore();
+        }
+
+        draw();
+    }
+
+    function stopMicVisualizer() {
+        if (micAnimFrame)  { cancelAnimationFrame(micAnimFrame); micAnimFrame = null; }
+        if (micAudioCtx)   { micAudioCtx.close(); micAudioCtx = null; }
+        micAnalyser  = null;
+        micDataArray = null;
+        micCanvas.style.opacity = '0';
+        micCtx.clearRect(0, 0, micCanvas.width, micCanvas.height);
+    }
+
     voiceIcon.src = '/frontend/male_icon.png';
 
     // ── Lottie animations ────────────────────────────────────────
@@ -40,14 +128,15 @@ document.addEventListener('DOMContentLoaded', () => {
         lottieContainerPink.style.opacity  = 0;
         lottieContainerGreen.style.opacity = 0;
 
+        if (state !== 'listening') stopMicVisualizer();
+
         if (state === 'ready') {
             orbButton.classList.remove('active');
             orbStatus.innerText = "Push to Talk";
         } else if (state === 'listening') {
             orbButton.classList.add('active');
             orbStatus.innerText = "Listening";
-            lottieContainerGreen.style.opacity = 1;
-            animationGreen.goToAndPlay(0, true);
+            // mic canvas handles the visual — green Lottie stays hidden
         } else if (state === 'processing') {
             orbStatus.innerText = "Thinking...";
         } else if (state === 'speaking') {
@@ -128,6 +217,9 @@ document.addEventListener('DOMContentLoaded', () => {
             mediaRecorder = new MediaRecorder(stream);
             audioChunks   = [];
             mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+
+            // Start real-time waveform visualizer from the live mic stream
+            startMicVisualizer(stream);
 
             mediaRecorder.onstop = async () => {
                 setOrbState('processing');

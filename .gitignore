@@ -4,4 +4,9 @@ __pycache__/
 .vscode/
 .claude/
 .clone
-chroma_db
+backend/chroma_db/
+chroma_db/
+tickets/
+*.pyc
+*.pyo
+.DS_Store

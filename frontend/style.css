@@ -171,7 +171,21 @@ body {
     position: absolute;
     opacity: 0;
     transition: opacity 0.3s ease;
-}   
+    z-index: 2;
+}
+
+#micVisualizer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    z-index: 5;        /* above lottie, below status text */
+    pointer-events: none;
+}
 
 .orb-unified.active .orb-content {
     opacity: 0;
