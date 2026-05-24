@@ -55,8 +55,13 @@ def _is_tier2(text: str) -> bool:
 MAX_ATTEMPTS = 3       # hard escalation after this many troubleshoot responses
 MAX_CLARIFY  = 3       # after this many consecutive unintelligible inputs, give up gracefully
 conversation_history: list[dict] = []
-attempt_count: int  = 0   # troubleshoot responses given this session
-clarify_count: int  = 0   # consecutive unintelligible/clarify turns
+attempt_count: int       = 0     # troubleshoot responses given this session
+clarify_count: int       = 0     # consecutive unintelligible/clarify turns
+pending_correction: str | None = None   # corrected transcript awaiting user confirmation
+
+# Words that count as "yes, that's right" when confirming a correction
+_CONFIRM_WORDS = {"yes", "yeah", "yep", "yup", "correct", "right", "sure", "exactly",
+                  "affirmative", "that's right", "thats right", "that is right"}
 
 # ── App init ─────────────────────────────────────────────────────
 app = FastAPI()
@@ -104,7 +109,7 @@ async def process_call(
     file: UploadFile = File(...),
     voice_id: str = Form("male")
 ):
-    global conversation_history, attempt_count, clarify_count
+    global conversation_history, attempt_count, clarify_count, pending_correction
     tmp_path = None
     try:
         # 1. Save audio to temp file
@@ -129,6 +134,48 @@ async def process_call(
         correction_result = correction(raw_transcript)
         corrected    = correction_result.get("corrected_transcript", raw_transcript)
         confidence   = correction_result.get("confidence", "low")
+        corrections  = correction_result.get("corrections", [])
+
+        # 3a. Pending-confirmation check ──────────────────────────────
+        # If the previous turn asked the user to confirm a correction, resolve it now.
+        if pending_correction is not None:
+            simple = corrected.lower().strip().rstrip(".,!")
+            if any(w in simple.split() for w in _CONFIRM_WORDS):
+                logger.process_gate("CORRECTION CONFIRMED", f"applying → '{pending_correction}'")
+                corrected   = pending_correction
+                confidence  = "high"
+                corrections = []
+            else:
+                logger.process_gate("CORRECTION REJECTED", "user rephrased — using new input directly")
+            pending_correction = None
+
+        # 3b. Uncertain-correction gate ───────────────────────────────
+        # When the LLM changed the transcript but isn't confident, ask before acting.
+        elif confidence in ("medium", "low") and corrections and corrected != raw_transcript:
+            corrected_terms = [c["corrected"] for c in corrections]
+            terms_str = " and ".join(f'"{t}"' for t in corrected_terms)
+            bot_message = (
+                f"Sorry, I had a little trouble hearing that clearly. "
+                f"Did you say {terms_str}? Just confirm and I'll get right on it, "
+                f"or go ahead and rephrase if I got it wrong."
+            )
+            pending_correction = corrected
+            action = "clarify"
+            intent = "other"
+
+            conversation_history.append({"role": "user",      "content": raw_transcript})
+            conversation_history.append({"role": "assistant", "content": bot_message})
+            logger.process_gate("AWAITING CONFIRMATION", f"uncertain correction — asking user to confirm {terms_str}")
+            logger.bot_reply(bot_message)
+            audio_b64 = await get_audio_base64(bot_message, resolve_voice_id(voice_id))
+            return {
+                "corrected_transcript": raw_transcript,
+                "intent": intent,
+                "action": action,
+                "bot_message": bot_message,
+                "audio": audio_b64 if audio_b64 else "",
+                "ticket": None
+            }
 
         # 4a. Pre-flight gibberish check
         words        = corrected.split()
@@ -274,10 +321,11 @@ async def asr_only(file: UploadFile = File(...)):
 # ── /reset — clear server-side conversation history ───────────────
 @app.post("/reset")
 async def reset_session():
-    global conversation_history, attempt_count, clarify_count
+    global conversation_history, attempt_count, clarify_count, pending_correction
     conversation_history = []
-    attempt_count  = 0
-    clarify_count  = 0
+    attempt_count      = 0
+    clarify_count      = 0
+    pending_correction = None
     print("[Session] Conversation history and all counters cleared.")
     return {"status": "ok"}
 

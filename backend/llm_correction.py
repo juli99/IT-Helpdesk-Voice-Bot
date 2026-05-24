@@ -15,6 +15,7 @@ from dotenv import load_dotenv, find_dotenv
 import logger
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR  = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=ROOT_DIR / ".env")
 load_dotenv(find_dotenv(usecwd=False))
 
@@ -23,7 +24,24 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1"
 )
 
-SYSTEM_PROMPT = """\
+# ── Load protected IT terms from the shared vocabulary file ──────
+# Any term that Whisper might produce correctly must not be altered by the LLM.
+# We use the single-word entries from it_vocab.json as the protection list.
+with open(BASE_DIR / "it_vocab.json") as _f:
+    _vocab_data = json.load(_f)
+
+PROTECTED_IT_TERMS: set[str] = {
+    t.lower() for t in _vocab_data.get("terms", [])
+    if len(t.split()) == 1   # single-word only — multi-word handled by word-count guard
+}
+
+# Build a short sample of protected terms for the prompt (acronyms are highest-risk)
+_acronym_sample = sorted(
+    t for t in PROTECTED_IT_TERMS if t == t.upper() and len(t) >= 2
+)[:30]
+_PROTECTED_SAMPLE = ", ".join(_acronym_sample)
+
+SYSTEM_PROMPT = f"""\
 You are an ASR post-processor for an IT support helpdesk.
 Whisper sometimes mishears technical terms — your job is to fix them.
 
@@ -32,9 +50,13 @@ Rules:
 - NEVER remove words from the transcript.
 - Only fix words that are clearly a Whisper mishearing of a real IT term.
 - Preserve the user's sentence structure exactly — do not rephrase or summarise.
-- Common Whisper mistakes: "VPN" heard as "the PN", "Outlook" as "out look",
+- PROTECTED TERMS — if any recognised IT term appears verbatim in the transcript (e.g.
+  {_PROTECTED_SAMPLE}, and many more), do NOT alter it under any circumstances.
+  Even if the surrounding words look wrong, leave the protected term exactly as-is.
+- Common Whisper mistakes to look for: "VPN" heard as "the PN", "Outlook" as "out look",
   "Active Directory" as "active rectory", "Wi-Fi" as "why fie",
   "HDMI" as "HD me", "DNS" as "the NS", "DHCP" as "D H CP".
+  Digits like "5" or "2" may be mishearings of short words like "my", "a", "to".
 - If the fuzzy_suggestions list contains a suggestion that would require ADDING a word,
   reject it — it is a false positive from the fuzzy matcher.
 - If the transcript looks correct as-is, return it unchanged with confidence "high".
@@ -44,11 +66,11 @@ Rules:
     "low"    — transcript is mostly unintelligible or too vague to act on
 
 Return ONLY valid JSON — no markdown, no preamble:
-{
+{{
   "corrected_transcript": string,
   "confidence": "high" | "medium" | "low",
-  "corrections": [{"original": string, "corrected": string}]
-}"""
+  "corrections": [{{"original": string, "corrected": string}}]
+}}"""
 
 
 def _extract_json(text: str) -> dict:
@@ -105,6 +127,25 @@ def llm_correct(transcript: str, flagged: list, vocab_terms: list) -> dict:
             result["confidence"] = "medium"
         if "corrections" not in result:
             result["corrections"] = []
+
+        # ── Safety net: restore any protected IT term the LLM accidentally altered ──
+        original_words  = transcript.split()
+        corrected_words = result["corrected_transcript"].split()
+        # Only attempt word-level restoration when lengths match (no word additions/removals)
+        if len(original_words) == len(corrected_words):
+            restored = []
+            for orig_w, corr_w in zip(original_words, corrected_words):
+                if orig_w.lower() in PROTECTED_IT_TERMS and orig_w.lower() != corr_w.lower():
+                    # LLM altered a protected term — put it back
+                    restored.append(orig_w)
+                else:
+                    restored.append(corr_w)
+            result["corrected_transcript"] = " ".join(restored)
+            # Remove any corrections that targeted a protected term
+            result["corrections"] = [
+                c for c in result["corrections"]
+                if c.get("original", "").lower() not in PROTECTED_IT_TERMS
+            ]
 
         # Tag each correction with its source for the terminal log
         fuzzy_suggested = {f["original"].lower() for f in flagged}

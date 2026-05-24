@@ -63,8 +63,9 @@ def fuzzy_check(transcript: str, vocab_terms: list) -> list:
             if score > best_score:
                 best_score, best_term = score, term
 
-        # Lower threshold: 75 (was 80) catches more genuine mis-pronunciations
-        if best_score >= 75 and best_term:
+        # Threshold 80: catches genuine mis-pronunciations without flagging
+        # common words like "having" → "hanging" (score 76.9).
+        if best_score >= 80 and best_term:
             flagged[word] = {
                 'original': word,
                 'matched_term': best_term,
