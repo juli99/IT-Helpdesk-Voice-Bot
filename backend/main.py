@@ -46,15 +46,29 @@ _TIER2_PATTERNS = [
     r'\bactive\s+directory\b.{0,25}\b(down|offline|completely|unavailable)\b',
     # Security incidents
     r'\b(ransomware|malware|breach|hacked|phishing\s+attack|cyber\s+attack|virus\s+spread)\b',
+    # Time-critical emergency: hard deadline + complete system failure
+    r'\b(presentation|meeting|demo|call|interview|class)\b.{0,60}\b(\d+\s+minutes?|few\s+minutes?|right\s+now|any\s+minute)\b',
+    r'\b(\d+\s+minutes?|few\s+minutes?|right\s+now)\b.{0,60}\b(presentation|meeting|demo|call|interview)\b',
 ]
 _TIER2_RE = re.compile('|'.join(_TIER2_PATTERNS), re.IGNORECASE)
+
+# Subset of Tier 2 patterns that represent time-critical emergencies (not infra/multi-user)
+_TIER2_URGENT_PATTERNS = [
+    r'\b(presentation|meeting|demo|call|interview|class)\b.{0,60}\b(\d+\s+minutes?|few\s+minutes?|right\s+now|any\s+minute)\b',
+    r'\b(\d+\s+minutes?|few\s+minutes?|right\s+now)\b.{0,60}\b(presentation|meeting|demo|call|interview)\b',
+]
+_TIER2_URGENT_RE = re.compile('|'.join(_TIER2_URGENT_PATTERNS), re.IGNORECASE)
 
 def _is_tier2(text: str) -> bool:
     return bool(_TIER2_RE.search(text))
 
+def _is_tier2_urgent(text: str) -> bool:
+    """True when the Tier 2 trigger is a time-critical emergency (not infra/multi-user)."""
+    return bool(_TIER2_URGENT_RE.search(text))
+
 MAX_ATTEMPTS = 3       # hard escalation after this many troubleshoot responses
 MAX_CLARIFY  = 3       # after this many consecutive unintelligible inputs, give up gracefully
-MAX_TURNS    = 12      # absolute session cap — prevents endless clarification loops
+MAX_TURNS    = 20      # absolute session cap — prevents endless clarification loops
 conversation_history: list[dict] = []
 attempt_count: int       = 0     # troubleshoot responses given this session
 clarify_count: int       = 0     # consecutive unintelligible/clarify turns
@@ -64,9 +78,11 @@ troubleshoot_steps: list[str] = []      # only bot messages with action == "trou
 last_intent:       str  = "other"   # carried into the hard-escalate path (no LLM there)
 tier2_escalation: bool  = False     # True only when the rule-based Tier 2 gate fires
 
-# Words that count as "yes, that's right" when confirming a correction
+# Words/phrases that count as "yes, that's right" when confirming a correction
 _CONFIRM_WORDS = {"yes", "yeah", "yep", "yup", "correct", "right", "sure", "exactly",
-                  "affirmative", "that's right", "thats right", "that is right"}
+                  "affirmative", "indeed", "absolutely", "confirmed", "did", "said",
+                  "that's right", "thats right", "that is right", "i did", "that's it",
+                  "thats it", "that's correct", "thats correct"}
 
 # ── App init ─────────────────────────────────────────────────────
 app = FastAPI()
@@ -141,22 +157,44 @@ async def process_call(
         confidence   = correction_result.get("confidence", "low")
         corrections  = correction_result.get("corrections", [])
 
-        # 3a. Pending-confirmation check ──────────────────────────────
-        # If the previous turn asked the user to confirm a correction, resolve it now.
-        if pending_correction is not None:
-            simple = corrected.lower().strip().rstrip(".,!")
-            if any(w in simple.split() for w in _CONFIRM_WORDS):
-                logger.process_gate("CORRECTION CONFIRMED", f"applying → '{pending_correction}'")
-                corrected   = pending_correction
-                confidence  = "high"
-                corrections = []
-            else:
-                logger.process_gate("CORRECTION REJECTED", "user rephrased — using new input directly")
-            pending_correction = None
+        # 3a. Early Tier 2 check ──────────────────────────────────────
+        # Run BEFORE the confirmation gate so a Tier 2 emergency is never delayed
+        # by a "did you mean X?" turn. Check both the corrected text and the raw
+        # transcript — a single misheard word ("sense"→"since") must not block escalation.
+        _tier2_now = _is_tier2(corrected) or _is_tier2(raw_transcript)
 
-        # 3b. Uncertain-correction gate ───────────────────────────────
+        # 3b. Pending-confirmation check ──────────────────────────────
+        # If the previous turn asked the user to confirm a correction, resolve it now.
+        # Also check if the stored pending correction was itself a Tier 2 message —
+        # if so, the confirmation answer is irrelevant; escalate immediately.
+        if pending_correction is not None:
+            if _is_tier2(pending_correction):
+                # The original message was Tier 2 — escalate regardless of user reply
+                logger.process_gate("TIER 2 IN PENDING", f"escalating stored correction: '{pending_correction[:60]}'")
+                corrected        = pending_correction
+                _tier2_now       = True
+                tier2_escalation = True
+                pending_correction = None
+            else:
+                simple = corrected.lower().strip().rstrip(".,!")
+                # Check word-by-word AND substring (catches "I did say that", "that's it" etc.)
+                confirmed = (
+                    any(w in simple.split() for w in _CONFIRM_WORDS) or
+                    any(phrase in simple for phrase in _CONFIRM_WORDS if len(phrase.split()) > 1)
+                )
+                if confirmed:
+                    logger.process_gate("CORRECTION CONFIRMED", f"applying → '{pending_correction}'")
+                    corrected   = pending_correction
+                    confidence  = "high"
+                    corrections = []
+                else:
+                    logger.process_gate("CORRECTION REJECTED", "user rephrased — using new input directly")
+                pending_correction = None
+
+        # 3c. Uncertain-correction gate ───────────────────────────────
         # When the LLM changed the transcript but isn't confident, ask before acting.
-        elif confidence in ("medium", "low") and corrections and corrected != raw_transcript:
+        # Skip entirely if the corrected text is a Tier 2 emergency — escalate now.
+        elif not _tier2_now and confidence in ("medium", "low") and corrections and corrected != raw_transcript:
             bot_message = (
                 f"Just to confirm — did you mean: \"{corrected}\"? "
                 f"Say yes and I'll get right on it, or go ahead and rephrase if I got it wrong."
@@ -167,6 +205,8 @@ async def process_call(
 
             conversation_history.append({"role": "user",      "content": raw_transcript})
             conversation_history.append({"role": "assistant", "content": bot_message})
+            # Note: total_turns is intentionally NOT incremented here —
+            # a correction-confirmation question is not a real bot response.
             logger.process_gate("AWAITING CONFIRMATION", f"uncertain correction → '{corrected}'")
             logger.bot_reply(bot_message)
             audio_b64 = await get_audio_base64(bot_message, resolve_voice_id(voice_id))
@@ -189,14 +229,22 @@ async def process_call(
             logger.process_clarify(clarify_count, MAX_CLARIFY)
 
         # 4b. Tier 2 rule-based gate — fires before LLM, cannot be overridden
-        if not is_gibberish and _is_tier2(corrected):
+        if not is_gibberish and _tier2_now:
             logger.process_gate("TIER 2 DETECTED", f"rule-based match in: '{corrected[:60]}'")
-            bot_message = (
-                "This sounds like it's affecting multiple users or a critical system — "
-                "that's a Tier 2 issue that needs immediate attention from our infrastructure "
-                "team. I'm creating a high-priority ticket right now and a specialist will "
-                "be in touch with you shortly."
-            )
+            _urgent = _is_tier2_urgent(corrected) or _is_tier2_urgent(raw_transcript)
+            if _urgent:
+                bot_message = (
+                    "I can hear the urgency — with only minutes to go you need hands-on help "
+                    "right now, not a step-by-step walkthrough. I'm escalating this immediately "
+                    "to a technician who can get to you straight away and get that machine up."
+                )
+            else:
+                bot_message = (
+                    "This sounds like it's affecting multiple users or a critical system — "
+                    "that's a Tier 2 issue that needs immediate attention from our infrastructure "
+                    "team. I'm creating a high-priority ticket right now and a specialist will "
+                    "be in touch with you shortly."
+                )
             action = "escalate"
             intent = "other"
             tier2_escalation = True
@@ -224,40 +272,37 @@ async def process_call(
             intent = "other"
             logger.process_gate("CLARIFY WALL", f"streak reached {MAX_CLARIFY}")
 
-        # 4d. True hard escalate — counter pushed past limit by a prior final exchange.
-        #     No LLM call; escalate unconditionally.
+        # 4d. Hard escalate — all MAX_ATTEMPTS troubleshoot steps have been given.
+        #     Always calls the LLM with is_final=True so it knows the limit is reached.
+        #     The LLM uses action="explain" for sub-questions about the current step
+        #     ("how do I do that?") and action="escalate" when the step has failed.
+        #     Any action other than "escalate"/"close" is treated as a sub-question
+        #     and answered without closing the session. Multiple sub-questions are
+        #     allowed freely — only MAX_TURNS acts as the outer safety net.
+        #     Safety net: if LLM ignores is_final and returns "troubleshoot" (new step),
+        #     we force action="escalate" so the session always ends here.
         elif attempt_count >= MAX_ATTEMPTS:
-            logger.process_gate("HARD ESCALATE", f"attempt_count {attempt_count} >= {MAX_ATTEMPTS} — no further LLM")
-            bot_message = (
-                "I've gone through all the troubleshooting steps I have available and "
-                "unfortunately haven't been able to resolve this for you. I'm escalating "
-                "this to our specialist team right now — someone will be in touch shortly."
-            )
-            action = "escalate"
-            intent = last_intent
-
-        # 4e. Final exchange — attempt 3 always runs with is_final=True so the LLM
-        #     knows to wrap up rather than propose a new approach.
-        #     If the LLM still returns "troubleshoot" (completing a step in progress),
-        #     increment the counter so the NEXT request hard-escalates unconditionally.
-        elif attempt_count == MAX_ATTEMPTS - 1:
-            logger.process_gate("FINAL EXCHANGE", f"attempt {attempt_count + 1}/{MAX_ATTEMPTS} — LLM wraps up")
+            logger.process_gate("HARD ESCALATE CHECK", f"attempt_count {attempt_count} >= {MAX_ATTEMPTS} — is_final LLM call")
             rag_result  = rag_respond(corrected, conversation_history,
-                                      attempt=MAX_ATTEMPTS, is_final=True)
-            bot_message = rag_result["message"]
+                                      attempt=attempt_count, is_final=True)
             action      = rag_result["action"]
+            bot_message = rag_result["message"]
             intent      = rag_result.get("intent", last_intent)
             last_intent = intent
-
-            if action == "troubleshoot":
-                attempt_count += 1
-                troubleshoot_steps.append(bot_message)
-                logger.process_attempt(attempt_count, MAX_ATTEMPTS)
             clarify_count = 0
 
+            if action == "troubleshoot":
+                # LLM ignored is_final and proposed a new step — force escalate.
+                logger.process_gate("HARD ESCALATE", "LLM returned troubleshoot despite is_final — forcing escalate")
+                action = "escalate"
+            elif action not in ("escalate", "close"):
+                # explain / chat / clarify — sub-question answered, session stays open.
+                logger.process_gate("SUB-QUESTION", f"action='{action}' — answering without escalating")
+
         else:
-            # 4f. Normal RAG path — only reached on attempts 1 and 2.
-            #     The LLM never sees "attempt 3 of 3" here, so it cannot self-escalate.
+            # 4e. Normal RAG path — attempts 1, 2, and 3.
+            #     The LLM never sees is_final=True here, so it proposes steps naturally
+            #     without "last attempt" warnings. Escalation is driven by the gate above.
             rag_result  = rag_respond(corrected, conversation_history, attempt=attempt_count + 1)
             bot_message = rag_result["message"]
             action      = rag_result["action"]
