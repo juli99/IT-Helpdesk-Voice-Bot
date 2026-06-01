@@ -1,20 +1,20 @@
 # IT Helpdesk Voice Bot
 
-An AI-powered voice assistant that handles Tier 1 IT support calls autonomously — triaging issues, walking users through troubleshooting steps, and escalating to human agents when necessary. Built with a push-to-talk interface, real-time ASR correction, RAG-grounded responses, and auto-generated PDF support tickets.
+An AI-powered voice assistant that handles Tier 1 IT support calls autonomously - triaging issues, walking users through troubleshooting steps, and escalating to human agents when necessary. Built with a push-to-talk interface, real-time ASR correction, RAG-grounded responses, and auto-generated PDF support tickets.
 
 ---
 
 ## Features
 
-- **Push-to-talk voice interface** — hold to speak, release to process
-- **Real-time waveform visualizer** — mic audio rendered live inside the orb during recording
-- **Whisper ASR** — local, on-device speech-to-text
-- **Two-stage ASR correction** — fuzzy matching + LLM contextual correction with a confirmation gate for uncertain corrections
-- **RAG pipeline** — ChromaDB + Sentence-Transformers retrieves relevant IT knowledge before each LLM response
-- **Structured escalation logic** — Tier 2 rule-based detection, clarify wall, attempt limit, sub-question awareness
-- **PDF ticket generation** — auto-generated on every session end with LLM-distilled steps and outcome
-- **Voice & theme toggles** — male/female TTS voice, dark/light mode
-- **Live agent transfer** — manual escalation button
+- **Push-to-talk voice interface** - hold to speak, release to process
+- **Real-time waveform visualizer** - mic audio rendered live inside the orb during recording
+- **Whisper ASR** - local, on-device speech-to-text
+- **Two-stage ASR correction** - fuzzy matching + LLM contextual correction with a confirmation gate for uncertain corrections
+- **RAG pipeline** - ChromaDB + Sentence-Transformers retrieves relevant IT knowledge before each LLM response
+- **Structured escalation logic** - Tier 2 rule-based detection, clarify wall, attempt limit, sub-question awareness
+- **PDF ticket generation** - auto-generated on every session end with LLM-distilled steps and outcome
+- **Voice & theme toggles** - male/female TTS voice, dark/light mode
+- **Live agent transfer** - manual escalation button
 
 ---
 
@@ -24,7 +24,7 @@ An AI-powered voice assistant that handles Tier 1 IT support calls autonomously 
 |---|---|
 | Frontend | HTML5, CSS3, Vanilla JavaScript (Web Audio API, MediaRecorder, Lottie) |
 | Backend | FastAPI (Python 3.11) |
-| Speech-to-Text | OpenAI Whisper (tiny model) — runs locally |
+| Speech-to-Text | OpenAI Whisper (tiny model) - runs locally |
 | ASR Correction – Fuzzy | RapidFuzz |
 | ASR Correction – LLM | Groq API (LLaMA 3.3 70B) |
 | Vector Database | ChromaDB + Sentence-Transformers (all-MiniLM-L6-v2) |
@@ -86,8 +86,8 @@ ELEVENLABS_VOICE_ID_MALE=your_male_voice_id
 ELEVENLABS_VOICE_ID_FEMALE=your_female_voice_id
 ```
 
-- **Groq API key** — free at https://console.groq.com
-- **ElevenLabs API key** — https://elevenlabs.io (free tier available)
+- **Groq API key** - free at https://console.groq.com
+- **ElevenLabs API key** - https://elevenlabs.io (free tier available)
 - Voice IDs are found in your ElevenLabs voice library
 
 ### 4. Build the knowledge base (first run only)
@@ -114,7 +114,7 @@ Navigate to http://localhost:8000 in your browser.
 
 ## Usage
 
-1. **Click the orb** — the bot greets you with Alex's welcome message
+1. **Click the orb** - the bot greets you with Alex's welcome message
 2. **Hold the orb** to speak, **release** to send
 3. The waveform visualizer shows your mic input in real time
 4. The bot responds via voice and text chat
@@ -136,6 +136,6 @@ PDF tickets are automatically saved to the `/tickets/` folder at the end of each
 | Security incident (ransomware, breach, malware) | Immediate Tier 2 escalation |
 | Hard deadline + system failure ("presentation in 20 minutes, computer won't start") | Immediate urgent escalation |
 | 3 failed troubleshooting attempts | Escalation with LLM wrap-up (sub-questions still answered) |
-| 3 consecutive unintelligible inputs | Clarify wall — suggests Live Agent |
-| 20 total turns | Session cap — graceful escalation |
+| 3 consecutive unintelligible inputs | Clarify wall - suggests Live Agent |
+| 20 total turns | Session cap - graceful escalation |
 
